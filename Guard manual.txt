@@ -1,0 +1,224 @@
+====================config hostname on both server=====================
+
+dbs# hostnamectl set-hostname dbs.oracle.ir
+stb# hostnamectl set-hostname stb.oracle.ir
+
+====================set hosts on both server===========================
+
+# vi /etc/hosts
+
+192.168.1.40        dbs.oracle.ir       dbs
+192.168.1.41        stb.oracle.ir       stb
+
+========================Install software oracle on stb server=======================
+
+========================Configuration Listener on both server===========================
+
+dbs$ vi /oracle/product/19.0.3/network/admin/listener.ora
+
+on primary:
+
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = orcldbs.oracle.ir)
+      (ORACLE_HOME = /oracle/product/19.0.0.0/db_1)
+      (SID_NAME = orcldbs)
+    )
+  )
+
+LISTENER =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = dbs.oracle.ir)(PORT = 1521))
+  )
+
+ADR_BASE_LISTENER = /oracle
+
+
+on stand by:
+
+stb$ vi /oracle/product/19.0.3/network/admin/listener.ora
+
+SID_LIST_LISTENER =
+  (SID_LIST =
+    (SID_DESC =
+      (GLOBAL_DBNAME = orclstb.oracle.ir)
+      (ORACLE_HOME = /oracle/product/19.0.0.0/db_1)
+      (SID_NAME = orclstb)
+    )
+  )
+
+LISTENER =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = stb.oracle.ir)(PORT = 1521))
+  )
+
+ADR_BASE_LISTENER = /oracle
+
+====================Configuration Tnsnames.ora on both server===========================
+
+DBS$ vi /oracle/product/19.0.3/network/admin/tnsnames.ora
+
+TNSDBS =
+  (DESCRIPTION =
+    (ADDRESS_LIST =
+      (ADDRESS = (PROTOCOL = TCP)(HOST = dbs.oracle.ir)(PORT = 1521))
+    )
+    (CONNECT_DATA =
+      (SERVICE_NAME = orcldbs.oracle.ir)
+    )
+  )
+
+TNSSTB =
+  (DESCRIPTION =
+    (ADDRESS_LIST =
+      (ADDRESS = (PROTOCOL = TCP)(HOST = stb.oracle.ir)(PORT = 1521))
+    )
+    (CONNECT_DATA =
+      (SERVICE_NAME = orclstb.oracle.ir)
+    )
+  )
+
+====================Copy password file to STB ===========================
+
+dbs$ scp -r /oracle/product/19.0.3/dbs/orapworcldbs oracle@stb:/oracle/product/19.0.3/dbs/orapworclstb
+
+
+====================Check Connection listener and tns on both server ===========================
+
+dbs$ tnsping tnsdbs
+dbs$ tnsping tnsstb
+dbs$ sqlplus "sys/123321@tnsdbs as sysdba"
+dbs$ sqlplus "sys/123321@tnsstb as sysdba"
+
+stb$ tnsping tnsdbs
+stb$ tnsping tnsstb
+stb$ sqlplus "sys/123321@tnsdbs as sysdba"
+stb$ sqlplus "sys/123321@tnsstb as sysdba"
+
+=====================Check Primary server is in Archive mode==================================
+dbs$ sqlplus / as sysdba
+
+SQL> select log_mode from v$database;
+LOG_MODE
+------------
+NOARCHIVELOG
+
+
+
+- For configuring Archive mode use:
+
+SQL> alter system set log_archive_dest_1='LOCATION=USE_DB_RECOVERY_FILE_DEST' scope=both;
+SQL> shutdown immediate
+SQL> startup  mount
+SQL> alter database archivelog;
+SQL> alter database open;
+
+===================================Enable force logging on primary server=============================
+
+sqldbs> select name, force_logging from v$database;
+
+sqldbs> alter database force logging;
+
+=====================================Create Standby redo logs on dbs===================================
+
+SQL> select GROUP#,THREAD# , BYTES from v$log;
+
+SQL> alter database add standby logfile thread 1;
+
+SQL> select group#,thread#,sequence#, status from v$standby_log;
+
+====================================Config parameters on primary server=================================
+
+SQL> 
+ 
+alter system set standby_file_management=AUTO;
+
+alter system set log_archive_config='DG_CONFIG=(orcldbs,orclstb)';
+
+alter system set log_archive_dest_1='LOCATION=USE_DB_RECOVERY_FILE_DEST VALID_FOR=(ALL_LOGFILES,ALL_ROLES) db_unique_name=orcldbs';
+
+alter system set log_archive_dest_2='service=tnsstb lgwr sync affirm valid_for=(online_logfiles, primary_role) db_unique_name=orclstb'; 
+
+alter system set fal_server='tnsstb'; 
+
+==================================create folder on standby server=========================================
+STB$ 
+
+mkdir -p /oracle/admin/prodeast/adump
+
+mkdir -p /oracle/oradata/PRODEAST/controlfile
+
+mkdir -p /oracle/oradata/PRODEAST/datafile
+
+mkdir -p /oracle/oradata/PRODEAST/onlinelog
+
+mkdir -p /oracle/fast_recovery_area/PRODEAST/onlinelog
+
+mkdir -p /oracle/fast_recovery_area/PRODEAST/controlfile
+
+===================================Create pfile on Standby server===========================================
+STB$ vi /oracle/pfile.ora
+
+*.audit_file_dest='/oracle/admin/orclstb/adump'
+*.audit_trail='db'
+*.compatible='19.0.0'
+*.db_block_size=8192
+*.db_create_file_dest='/oracle/oradata'
+*.db_domain='linux.com'
+*.db_name='orcl'
+*.db_unique_name='orclstb'
+*.db_recovery_file_dest='/oracle/fast_recovery_area'
+*.db_recovery_file_dest_size=8256m
+*.diagnostic_dest='/oracle'
+*.fal_server='orcl'
+*.fal_client='orclstb'
+*.log_archive_config='DG_CONFIG=(orcl,orclstb)'
+*.log_archive_dest_1='LOCATION=USE_DB_RECOVERY_FILE_DEST VALID_FOR=(ALL_LOGFILES,ALL_ROLES) db_unique_name=orclstb'
+*.nls_language='AMERICAN'
+*.nls_territory='AMERICA'
+*.remote_login_passwordfile='EXCLUSIVE'
+*.standby_file_management='AUTO'
+*.undo_tablespace='UNDOTBS1'
+*.db_file_name_convert='/oracle/oradata/ORCL/datafile/','/oracle/oradata/ORCLSTB/datafile/'
+*.log_file_name_convert='/oracle/oradata/ORCL/onlinelog/','/oracle/oradata/ORCLSTB/onlinelog/','/oracle/fast_recovery_area/ORCL/onlinelog/','/oracle/fast_recovery_area/ORCLSTB/onlinelog/'
+
+:x
+
+==============================Create spfile on STB=================================================================
+
+SQLSTB> create spfile from pfile='/oracle/pfile.ora'
+
+SQLSTB> startup nomount
+
+================================Connect Rman in dbs or stb=========================================================
+
+$ rman target sys@tnsdbs auxiliary sys@tnsstb
+
+Rman> run{
+ allocate channel ch1 type disk;
+ allocate auxiliary channel stby type disk;
+ duplicate target database for standby from active database nofilenamecheck;
+}
+================================ startup on stb=====================================================================
+
+sql> shu immediate
+
+sql> startup mount
+
+SQL> select open_mode,database_role from v$database;
+
+=================================check Shipping archivelog=========================================================
+
+SQL> select sequence#,applied from v$archived_log;
+
+=================================Active recovery managed============================================================
+
+SQL> ALTER DATABASE RECOVER MANAGED STANDBY DATABASE THROUGH ALL SWITCHOVER DISCONNECT USING CURRENT LOGFILE;
+
+==================================Check mrp status==================================================================
+
+SQL> SELECT STATUS,PROCESS FROM V$MANAGED_STANDBY
+
+
+SQL> ALTER DATABASE RECOVER MANAGED STANDBY DATABASE THROUGH ALL SWITCHOVER DISCONNECT USING CURRENT LOGFILE;
